@@ -1,5 +1,10 @@
+import 'dart:async';
+
+import 'package:cixiohub_mobile/services/notification_service.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 import 'screens/auth/login_screen.dart';
 import 'services/auth_state.dart';
@@ -14,9 +19,30 @@ import 'widgets/app_shell.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
   // Pre-load auth state so GoRouter can redirect synchronously (no blank flash).
   await authNotifier.initialize();
   runApp(const CixioHubApp());
+  // Notification setup must never block the first frame.
+  unawaited(_initNotifications());
+}
+
+Future<void> _initNotifications() async {
+  try {
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+    await NotificationService.initialize(
+      onForegroundMessage: (message) {
+        print("Foreground: ${message.notification?.title}");
+      },
+      onNotificationClicked: (message) {
+        print("Clicked: ${message.data}");
+      },
+    );
+    final deviceToken = await NotificationService.getDeviceToken();
+    debugPrint('FCM device token at startup: $deviceToken');
+  } catch (e) {
+    debugPrint('Notification init failed: $e');
+  }
 }
 
 final _router = GoRouter(
@@ -26,7 +52,7 @@ final _router = GoRouter(
   redirect: (context, state) {
     final isAuthRoute = state.matchedLocation.startsWith('/login') ||
         state.matchedLocation.startsWith('/register');
-    if (!authNotifier.isLoggedIn && !isAuthRoute) return '/login';
+    // if (!authNotifier.isLoggedIn && !isAuthRoute) return '/login';
     if (authNotifier.isLoggedIn && isAuthRoute) return '/chat';
     return null;
   },
