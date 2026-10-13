@@ -33,6 +33,24 @@ class AppConfig {
   static bool get hasAwsCredentials =>
       awsAccessKeyId.isNotEmpty && awsSecretAccessKey.isNotEmpty;
 
+  // ── Direct S3 upload ──
+  // The app signs requests on-device (AWS SigV4) and PUTs files straight to the
+  // bucket. No Lambda / API Gateway is involved.
+  //   flutter run --dart-define=AWS_S3_BUCKET=my-bucket \
+  //               --dart-define=AWS_S3_REGION=ap-south-1 \
+  //               --dart-define=AWS_S3_PREFIX=testing/user1
+  static const String s3Bucket = String.fromEnvironment('AWS_S3_BUCKET');
+
+  static const String s3Region =
+      String.fromEnvironment('AWS_S3_REGION', defaultValue: 'ap-south-1');
+
+  static const String s3Prefix =
+      String.fromEnvironment('AWS_S3_PREFIX', defaultValue: 'testing/user1');
+
+  /// True when the app has everything needed to upload directly to S3.
+  static bool get hasS3Upload =>
+      s3Bucket.isNotEmpty && hasAwsCredentials;
+
   static const String apiVersion = '/api/v1';
   static String get apiUrl => '$apiBaseUrl$apiVersion';
   static String get notifyUrl => '$notifyBaseUrl$apiVersion';

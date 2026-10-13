@@ -8,12 +8,15 @@ import 'package:firebase_core/firebase_core.dart';
 
 import 'screens/auth/login_screen.dart';
 import 'services/auth_state.dart';
+import 'services/background_sync.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/chat/chat_sessions_screen.dart';
 import 'screens/chat/chat_screen.dart';
 import 'screens/documents/documents_screen.dart';
+import 'screens/media/media_screen.dart';
 import 'screens/todos/todos_screen.dart';
 import 'screens/profile/profile_screen.dart';
+import 'services/media_service.dart';
 import 'theme/cixio_theme.dart';
 import 'widgets/app_shell.dart';
 
@@ -22,9 +25,13 @@ void main() async {
   await Firebase.initializeApp();
   // Pre-load auth state so GoRouter can redirect synchronously (no blank flash).
   await authNotifier.initialize();
+  // Register the OS background-upload dispatcher before scheduling any task.
+  await BackgroundUploadSync.initialize();
   runApp(const CixioHubApp());
   // Notification setup must never block the first frame.
   unawaited(_initNotifications());
+  // Prime the local media queue and start the periodic S3 sync timer.
+  unawaited(MediaService.instance.init());
 }
 
 Future<void> _initNotifications() async {
@@ -80,6 +87,11 @@ final _router = GoRouter(
         StatefulShellBranch(
           routes: [
             GoRoute(path: '/documents', builder: (_, __) => const DocumentsScreen()),
+          ],
+        ),
+        StatefulShellBranch(
+          routes: [
+            GoRoute(path: '/media', builder: (_, __) => const MediaScreen()),
           ],
         ),
         StatefulShellBranch(
