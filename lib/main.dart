@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cixiohub_mobile/services/notification_service.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:go_router/go_router.dart';
 import 'package:firebase_core/firebase_core.dart';
 
@@ -22,6 +23,9 @@ import 'widgets/app_shell.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Load the bundled `.env` before anything reads AppConfig (API base URL,
+  // SNS credentials, the presign upload Lambda URL).
+  await _loadEnvironment();
   await Firebase.initializeApp();
   // Pre-load auth state so GoRouter can redirect synchronously (no blank flash).
   await authNotifier.initialize();
@@ -32,6 +36,16 @@ void main() async {
   unawaited(_initNotifications());
   // Prime the local media queue and start the periodic S3 sync timer.
   unawaited(MediaService.instance.init());
+}
+
+Future<void> _loadEnvironment() async {
+  try {
+    await dotenv.load();
+  } catch (e) {
+    // Missing/unreadable `.env` is non-fatal: AppConfig falls back to
+    // --dart-define values and hard-coded defaults.
+    debugPrint('dotenv load failed, using dart-defines/defaults: $e');
+  }
 }
 
 Future<void> _initNotifications() async {

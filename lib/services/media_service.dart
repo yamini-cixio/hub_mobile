@@ -46,7 +46,7 @@ class MediaService extends ChangeNotifier with WidgetsBindingObserver {
   bool get isInitialized => _initialized;
   bool get isSyncing => _isSyncing;
   bool get isRecording => _isRecording;
-  bool get uploadConfigured => AppConfig.hasS3Upload;
+  bool get uploadConfigured => AppConfig.hasUploadUrl;
   String? get lastError => _lastError;
 
   List<MediaItem> get items => _store?.items ?? const [];

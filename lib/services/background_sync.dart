@@ -1,7 +1,9 @@
 import 'dart:io';
 import 'dart:ui' show DartPluginRegistrant;
 
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:workmanager/workmanager.dart';
 
 import 'media_store.dart';
@@ -28,6 +30,13 @@ void mediaUploadCallbackDispatcher() {
     } catch (_) {
       // Not available on every platform/engine; plugins may still work.
     }
+    // The background isolate is separate from the UI isolate, so the `.env`
+    // asset must be loaded again here for AppConfig to see the upload URL.
+    try {
+      await dotenv.load();
+    } catch (_) {
+      // Fall back to --dart-define values bundled into the binary.
+    }
     try {
       final store = await MediaStore.openDefault();
       await MediaUploader(store).syncPending();
@@ -49,8 +58,24 @@ class BackgroundUploadSync {
     await Workmanager().initialize(mediaUploadCallbackDispatcher);
   }
 
+  /// Whether the platform can run BGTaskScheduler/WorkManager tasks.
+  ///
+  /// The iOS Simulator does not support `BGTaskScheduler`; submitting a task
+  /// there aborts the app with `_handleSubmissionWithoutRegistrationForTaskRequest`.
+  /// Foreground sync (the in-app timer + resume hook) still runs on the simulator.
+  static Future<bool> _supportsBackgroundTasks() async {
+    if (!Platform.isIOS) return true;
+    try {
+      final ios = await DeviceInfoPlugin().iosInfo;
+      return ios.isPhysicalDevice;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Schedules the periodic retry (OS minimum is 15 minutes; iOS is best-effort).
   static Future<void> registerPeriodic() async {
+    if (!await _supportsBackgroundTasks()) return;
     try {
       await Workmanager().registerPeriodicTask(
         kMediaUploadPeriodicId,

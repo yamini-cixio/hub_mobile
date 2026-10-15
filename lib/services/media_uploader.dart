@@ -3,10 +3,11 @@ import 'dart:io';
 import '../config/app_config.dart';
 import '../models/media_item.dart';
 import 'media_store.dart';
-import 's3_upload_service.dart';
+import 'presign_upload_service.dart';
 
-/// Uploads queued media **directly to S3** using on-device SigV4 signing with
-/// the build-time AWS credentials in [AppConfig].
+/// Uploads queued media **through the presign Lambda**: it fetches a presigned
+/// PUT URL from [AppConfig.awsUploadUrl] and uploads straight to S3, so no AWS
+/// credentials are needed in the app.
 ///
 /// Deliberately free of Flutter UI dependencies so it can run in the
 /// background sync isolate as well as the main app.
@@ -28,11 +29,11 @@ class MediaUploader {
 
   /// Uploads a single queued item to S3. Returns `true` on success.
   Future<bool> uploadOne(MediaItem item) async {
-    if (!AppConfig.hasS3Upload) {
+    if (!AppConfig.hasUploadUrl) {
       await _fail(
         item,
-        'S3 upload not configured. Provide AWS_S3_BUCKET plus '
-        'AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.',
+        'Upload not configured. Provide AWS_UPLOAD_URL (the presign Lambda '
+        'Function URL).',
       );
       return false;
     }
@@ -46,15 +47,12 @@ class MediaUploader {
     await store.upsert(item.copyWith(status: UploadStatus.uploading));
 
     try {
-      final key = '${AppConfig.s3Prefix}/${item.fileName}';
-      final s3 = S3UploadService(
-        bucket: AppConfig.s3Bucket,
-        region: AppConfig.s3Region,
-        accessKeyId: AppConfig.awsAccessKeyId,
-        secretAccessKey: AppConfig.awsSecretAccessKey,
-        sessionToken: AppConfig.awsSessionToken,
+      final service = PresignUploadService(endpoint: AppConfig.awsUploadUrl);
+      final key = await service.upload(
+        file: file,
+        fileName: item.fileName,
+        contentType: item.mimeType,
       );
-      await s3.upload(file: file, key: key, contentType: item.mimeType);
       await store.upsert(item.copyWith(
         status: UploadStatus.uploaded,
         attempts: item.attempts + 1,
