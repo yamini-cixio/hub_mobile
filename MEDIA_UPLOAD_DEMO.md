@@ -58,6 +58,7 @@
 | Queue | `lib/services/media_store.dart` | Durable JSON queue + `media/` folder |
 | Uploader | `lib/services/media_uploader.dart` | Orchestrates upload of pending items |
 | S3 client | `lib/services/presign_upload_service.dart` | Talks to Lambda + S3 (single & multipart) |
+| Notifier | `lib/services/upload_notifier.dart` | Device notification on upload complete / fail |
 | Background | `lib/services/background_sync.dart` | WorkManager / BGTaskScheduler retries |
 | Config | `lib/config/app_config.dart` | Reads `AWS_UPLOAD_URL` from `.env`/`--dart-define` |
 
@@ -248,6 +249,40 @@ background tasks (Android WorkManager; iOS BGTaskScheduler on physical devices).
 
 ---
 
+## 5b. Upload notifications (completion / failure)
+
+The app posts a **device notification** when a sync run changes upload state, so
+the user is informed even when the app is backgrounded.
+
+| Trigger | Title | Body |
+|---|---|---|
+| ≥1 file uploaded | `Upload complete` / `Uploads complete` | `N file(s) were uploaded to the cloud.` |
+| first-ever failure of ≥1 file | `Upload failed` / `Uploads failed` | `N file(s) could not be uploaded. It will retry automatically.<error>` |
+
+Implementation: `lib/services/upload_notifier.dart` (class `UploadNotifier`),
+fired from `MediaUploader.syncPending()` (`media_uploader.dart`).
+
+- **Local, not remote.** The upload outcome is known on the device, so no FCM/APNs
+  server round-trip is needed — `UploadNotifier` uses the same
+  `flutter_local_notifications` plugin that renders foreground push banners.
+- **Channel:** `upload_status_channel` ("Upload status"), high importance, sound +
+  vibration (same look as the existing foreground push banner).
+- **De-duplicated:** fixed notification ids mean a newer result *replaces* the
+  previous banner. Failure alerts fire **only on the first failure** (attempts == 1)
+  so the 2-minute retry timer doesn't spam the user.
+- **Works in both isolates:** the foreground sync (timer / resume / capture) and
+  the OS background task both call `syncPending()`, so notifications appear either
+  way. All plugin access is guarded and errors are swallowed.
+- **Permissions:** requested at app start by `NotificationService.initialize()`
+  (`POST_NOTIFICATIONS` is declared in the Android manifest; iOS prompts on
+  first launch). `UploadNotifier` never re-prompts.
+
+> True **remote** push (a notification sent from the backend) would require the
+> Lambda/backend to call FCM/APNs after the S3 event. That's out of scope for the
+> app and is **not** used here.
+
+---
+
 ## 6. Demo script (~2 minutes)
 
 1. **Open the app → Media tab** (3rd in the bottom nav).
@@ -258,9 +293,14 @@ background tasks (Android WorkManager; iOS BGTaskScheduler on physical devices).
    - The new row flips **Pending → Uploading → Uploaded**; the cloud stays green.
 3. **Photo** — tap **Photo** → take a shot → watch the same lifecycle.
 4. **Video** — tap **Video** → record ~5 s → watch it upload.
-5. **Resilience** — pull down to refresh (or tap **Sync now**) to demonstrate the
+5. **Notification** — after the file turns **Uploaded**, a device notification
+   appears: *"Upload complete — 1 file was uploaded to the cloud."* To demo the
+   failure path, turn on Airplane Mode and capture again: after the first failed
+   attempt you get *"Upload failed — 1 file could not be uploaded. It will retry
+   automatically."* Turn Airplane Mode off and it uploads on the next retry.
+6. **Resilience** — pull down to refresh (or tap **Sync now**) to demonstrate the
    retry mechanism.
-6. **Delete** — tap the trash icon → dialog notes the local copy is removed while
+7. **Delete** — tap the trash icon → dialog notes the local copy is removed while
    an already-uploaded S3 object is kept.
 
 ### Optional: show the Lambda live
@@ -287,6 +327,7 @@ curl -s -X POST "https://3yzckdgen2ogld553howb2sj3y0yoisu.lambda-url.ap-south-1.
 - "**No AWS keys** ship in the app — the Lambda issues short-lived presigned URLs."
 - "Uploads are **self-healing**: retried every 2 minutes and whenever the app reopens."
 - "Large videos use **S3 multipart upload**, so a dropped connection only costs one part, not the whole file."
+- "The user gets a **notification** when an upload completes or fails — works even while the app is in the background."
 
 ---
 

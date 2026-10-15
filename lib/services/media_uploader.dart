@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 
 import '../config/app_config.dart';
 import '../models/media_item.dart';
 import 'media_store.dart';
 import 'presign_upload_service.dart';
+import 'upload_notifier.dart';
 
 /// Uploads queued media **through the presign Lambda**: it fetches a presigned
 /// PUT URL from [AppConfig.awsUploadUrl] and uploads straight to S3, so no AWS
@@ -17,12 +19,40 @@ class MediaUploader {
   final MediaStore store;
 
   /// Uploads everything still pending. Returns the number uploaded.
+  ///
+  /// Posts a device notification summarising the result: one for files that
+  /// completed, and one for files that failed (only on their first-ever
+  /// failure, so the 2-minute retry timer does not spam the user).
   Future<int> syncPending({void Function()? onChanged}) async {
     var uploaded = 0;
+    var firstTimeFailures = 0;
+    String? firstError;
+
     for (final item in List<MediaItem>.of(store.items)) {
       if (!item.needsUpload) continue;
-      if (await uploadOne(item)) uploaded++;
+      final ok = await uploadOne(item);
+      if (ok) {
+        uploaded++;
+      } else {
+        final updated = store.byId(item.id);
+        // `attempts` is incremented by `uploadOne`; ==1 means this was the
+        // first failure, so alert once and stay quiet on later retries.
+        if (updated?.attempts == 1) {
+          firstTimeFailures++;
+          firstError ??= updated?.lastError;
+        }
+      }
       onChanged?.call();
+    }
+
+    if (uploaded > 0) {
+      unawaited(UploadNotifier.uploadCompleted(count: uploaded));
+    }
+    if (firstTimeFailures > 0) {
+      unawaited(
+        UploadNotifier.uploadFailed(
+            count: firstTimeFailures, error: firstError),
+      );
     }
     return uploaded;
   }
