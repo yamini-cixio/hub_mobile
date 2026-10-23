@@ -58,7 +58,7 @@
 | Queue | `lib/services/media_store.dart` | Durable JSON queue + `media/` folder |
 | Uploader | `lib/services/media_uploader.dart` | Orchestrates upload of pending items |
 | S3 client | `lib/services/presign_upload_service.dart` | Talks to Lambda + S3 (single & multipart) |
-| Notifier | `lib/services/upload_notifier.dart` | Device notification on upload complete / fail |
+| Notifier | `lib/services/upload_notifier.dart` | Device notification on upload / delete complete or fail |
 | Background | `lib/services/background_sync.dart` | WorkManager / BGTaskScheduler retries |
 | Config | `lib/config/app_config.dart` | Reads `AWS_UPLOAD_URL` from `.env`/`--dart-define` |
 
@@ -210,7 +210,39 @@ Content-Type: application/json
 }
 ```
 
-### 4.5 Error responses
+### 4.5 Delete object
+
+When the user deletes an uploaded media item, the app asks the Lambda to remove
+the S3 object **before** touching local storage.
+
+**App sends**
+
+```http
+POST https://3yzckdgen2ogld553howb2sj3y0yoisu.lambda-url.ap-south-1.on.aws/
+Content-Type: application/json
+
+{
+  "action": "DELETE",
+  "objectKey": "testing/user1/1792067214667-to-delete.bin"
+}
+```
+
+**Lambda** issues `DeleteObjectCommand` to S3 and **responds**
+
+```json
+{
+  "message": "Object deleted successfully",
+  "objectKey": "testing/user1/1792067214667-to-delete.bin"
+}
+```
+
+- HTTP **200** confirms the object is gone (S3 `DeleteObject` is idempotent, so
+  deleting a missing key still returns success).
+- Only after the 200 does the app remove the local file (`File.delete()`) and the
+  queue entry. If the Lambda call fails, the local file is **kept** and an error
+  is shown, so nothing is silently orphaned.
+
+### 4.6 Error responses
 
 | Situation | Response |
 |---|---|
@@ -221,6 +253,15 @@ Content-Type: application/json
 > There is **no abort action** on this Lambda. If a multipart upload fails midway
 > the app retries from scratch; orphaned parts are cleaned up by an S3 lifecycle
 > rule (recommended).
+
+**Supported actions** (verified against the live Lambda):
+
+| `action` | Purpose |
+|---|---|
+| *(omitted)* / `SINGLE` | One presigned PUT URL |
+| `MULTIPART_INITIATE` | Start a multipart upload; returns per-part presigned URLs |
+| `MULTIPART_COMPLETE` | Finalise a multipart upload |
+| `DELETE` | Delete an S3 object (`DeleteObjectCommand`) |
 
 ---
 
@@ -249,18 +290,27 @@ background tasks (Android WorkManager; iOS BGTaskScheduler on physical devices).
 
 ---
 
-## 5b. Upload notifications (completion / failure)
+## 5b. Upload & delete notifications
 
-The app posts a **device notification** when a sync run changes upload state, so
-the user is informed even when the app is backgrounded.
+The app posts a **device notification** for upload and delete lifecycle events,
+so the user is informed even when the app is backgrounded.
 
-| Trigger | Title | Body |
-|---|---|---|
-| ≥1 file uploaded | `Upload complete` / `Uploads complete` | `N file(s) were uploaded to the cloud.` |
-| first-ever failure of ≥1 file | `Upload failed` / `Uploads failed` | `N file(s) could not be uploaded. It will retry automatically.<error>` |
+| Event | Title | Body | Fired from |
+|---|---|---|---|
+| ≥1 file uploaded | `Upload complete` / `Uploads complete` | `N file(s) were uploaded to the cloud.` | `MediaUploader.syncPending()` |
+| first-ever failure of ≥1 file | `Upload failed` / `Uploads failed` | `N file(s) could not be uploaded. It will retry automatically.<error>` | `MediaUploader.syncPending()` |
+| delete finished **while backgrounded** | `File deleted` | `"<fileName>" was deleted.` | `MediaService.delete()` |
+| delete failed **while backgrounded** | `Delete failed` | `"<fileName>" could not be deleted.<error>` | `MediaService.delete()` |
 
-Implementation: `lib/services/upload_notifier.dart` (class `UploadNotifier`),
-fired from `MediaUploader.syncPending()` (`media_uploader.dart`).
+Implementation: `lib/services/upload_notifier.dart` (class `UploadNotifier`).
+Upload notifications fire from `MediaUploader.syncPending()` (`media_uploader.dart`);
+delete notifications fire from `MediaService.delete()` (`media_service.dart`).
+
+- **Delete notifications are background-only.** A delete is user-initiated from
+  the Media screen, so at tap time the app is in the foreground and the screen
+  already shows a success/error snackbar. If the app is backgrounded while the
+  delete is in flight, `MediaService` (a `WidgetsBindingObserver`) notices and
+  posts a notification instead — so the outcome is never missed.
 
 - **Local, not remote.** The upload outcome is known on the device, so no FCM/APNs
   server round-trip is needed — `UploadNotifier` uses the same
@@ -300,8 +350,10 @@ fired from `MediaUploader.syncPending()` (`media_uploader.dart`).
    automatically."* Turn Airplane Mode off and it uploads on the next retry.
 6. **Resilience** — pull down to refresh (or tap **Sync now**) to demonstrate the
    retry mechanism.
-7. **Delete** — tap the trash icon → dialog notes the local copy is removed while
-   an already-uploaded S3 object is kept.
+7. **Delete** — tap the trash icon → confirm. The app deletes the S3 object via
+   the Lambda (`action: "DELETE"`) and only then removes the local copy; the row
+   disappears and a *"…deleted."* snackbar appears. (Background the app during
+   the delete to instead get a *"File deleted"* notification.)
 
 ### Optional: show the Lambda live
 
@@ -312,6 +364,11 @@ With a terminal visible, run the exact calls the app makes:
 curl -s -X POST "https://3yzckdgen2ogld553howb2sj3y0yoisu.lambda-url.ap-south-1.on.aws/" \
   -H "Content-Type: application/json" \
   -d '{"fileName":"demo.jpg","mimeType":"image/jpeg"}'
+
+# Delete
+curl -s -X POST "https://3yzckdgen2ogld553howb2sj3y0yoisu.lambda-url.ap-south-1.on.aws/" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"DELETE","objectKey":"testing/user1/<object-key>"}'
 
 # Multipart initiate
 curl -s -X POST "https://3yzckdgen2ogld553howb2sj3y0yoisu.lambda-url.ap-south-1.on.aws/" \
@@ -328,6 +385,8 @@ curl -s -X POST "https://3yzckdgen2ogld553howb2sj3y0yoisu.lambda-url.ap-south-1.
 - "Uploads are **self-healing**: retried every 2 minutes and whenever the app reopens."
 - "Large videos use **S3 multipart upload**, so a dropped connection only costs one part, not the whole file."
 - "The user gets a **notification** when an upload completes or fails — works even while the app is in the background."
+- "Delete reports back too: a snackbar in the foreground, a **notification** if the app is backgrounded."
+- "Deleting a file removes it from **S3 as well as the phone** — the app calls the Lambda first and only drops the local copy once S3 confirms."
 
 ---
 

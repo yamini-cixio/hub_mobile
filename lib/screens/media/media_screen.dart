@@ -28,7 +28,8 @@ class _MediaScreenState extends State<MediaScreen> {
     unawaited(_media.init());
   }
 
-  Future<void> _capture(Future<MediaItem?> Function() action, String label) async {
+  Future<void> _capture(
+      Future<MediaItem?> Function() action, String label) async {
     if (_busy) return;
     setState(() => _busy = true);
     final item = await action();
@@ -224,8 +225,10 @@ class _MediaTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       child: ListTile(
-        leading: Icon(_iconFor(item.type), color: _colorFor(item.type), size: 32),
-        title: Text(item.fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
+        leading:
+            Icon(_iconFor(item.type), color: _colorFor(item.type), size: 32),
+        title:
+            Text(item.fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(
           '${item.type.name} • ${_formatSize(item.sizeBytes)}',
           style: const TextStyle(fontSize: 12),
@@ -246,12 +249,14 @@ class _MediaTile extends StatelessWidget {
   }
 
   Future<void> _confirmDelete(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Delete file?'),
         content: const Text(
-          'This removes the local copy. An already-uploaded S3 object is kept.',
+          'This removes the local copy and, if it was uploaded, deletes the '
+          'file from the cloud too.',
         ),
         actions: [
           TextButton(
@@ -266,7 +271,21 @@ class _MediaTile extends StatelessWidget {
         ],
       ),
     );
-    if (confirmed == true) await media.delete(item.id);
+    if (confirmed != true) return;
+    try {
+      await media.delete(item.id);
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('"${item.fileName}" deleted.')),
+        );
+    } catch (e) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('Could not delete from the cloud: $e')),
+        );
+    }
   }
 
   Widget _statusChip(MediaItem item) {
@@ -350,7 +369,8 @@ class _EmptyState extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.photo_library_outlined, size: 56, color: CixioColors.muted),
+            Icon(Icons.photo_library_outlined,
+                size: 56, color: CixioColors.muted),
             SizedBox(height: 12),
             Text(
               'No media yet.\nRecord a voice note or capture a photo / video.',

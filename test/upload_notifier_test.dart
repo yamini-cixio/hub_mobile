@@ -51,4 +51,37 @@ void main() {
     expect(UploadNotifier.uploadCompleted(count: 0), completes);
     expect(UploadNotifier.uploadFailed(count: 0), completes);
   });
+
+  group('delete text', () {
+    test('success names the file', () {
+      expect(
+        UploadNotifier.bodyForDelete('a1b2.mp4'),
+        '"a1b2.mp4" was deleted.',
+      );
+    });
+
+    test('failure without error', () {
+      expect(
+        UploadNotifier.bodyForDeleteFailure('a1b2.mp4', null),
+        '"a1b2.mp4" could not be deleted.',
+      );
+    });
+
+    test('failure includes the first line of the error', () {
+      final body = UploadNotifier.bodyForDeleteFailure(
+        'a1b2.mp4',
+        'Access denied\nstack trace',
+      );
+      expect(body, contains('Access denied'));
+      expect(body, isNot(contains('stack trace')));
+    });
+
+    test('posting methods complete (plugin failures are swallowed)', () {
+      expect(UploadNotifier.mediaDeleted(fileName: 'a.mp4'), completes);
+      expect(
+        UploadNotifier.mediaDeleteFailed(fileName: 'a.mp4', error: 'nope'),
+        completes,
+      );
+    });
+  });
 }

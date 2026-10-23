@@ -11,6 +11,8 @@ import '../models/media_item.dart';
 import 'background_sync.dart';
 import 'media_store.dart';
 import 'media_uploader.dart';
+import 'presign_upload_service.dart';
+import 'upload_notifier.dart';
 
 /// Owns the whole voice / camera capture pipeline:
 ///
@@ -43,11 +45,18 @@ class MediaService extends ChangeNotifier with WidgetsBindingObserver {
   String? _recordingPath;
   String? _lastError;
 
+  /// Latest app lifecycle state; starts as foreground so a delete before the
+  /// first lifecycle callback still behaves correctly.
+  AppLifecycleState _lifecycle = AppLifecycleState.resumed;
+
   bool get isInitialized => _initialized;
   bool get isSyncing => _isSyncing;
   bool get isRecording => _isRecording;
   bool get uploadConfigured => AppConfig.hasUploadUrl;
   String? get lastError => _lastError;
+
+  /// Whether the app is currently in the foreground.
+  bool get _isInForeground => _lifecycle == AppLifecycleState.resumed;
 
   List<MediaItem> get items => _store?.items ?? const [];
 
@@ -76,6 +85,7 @@ class MediaService extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lifecycle = state;
     if (state == AppLifecycleState.resumed) {
       unawaited(syncNow());
     }
@@ -104,8 +114,7 @@ class MediaService extends ChangeNotifier with WidgetsBindingObserver {
       return false;
     }
 
-    final path =
-        '${_store!.mediaDirectoryPath}/${_uuid.v4()}.m4a';
+    final path = '${_store!.mediaDirectoryPath}/${_uuid.v4()}.m4a';
     try {
       await _recorder.start(
         const RecordConfig(
@@ -261,18 +270,48 @@ class MediaService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// Removes an item from the queue and deletes its local file.
+  /// Deletes an item: its S3 object (if uploaded) and its local file.
   ///
-  /// Note: this does not delete an already-uploaded S3 object.
+  /// The S3 object is deleted **first** through the presign Lambda; the local
+  /// file and queue entry are only removed once the backend confirms (HTTP
+  /// 200), so a failed remote delete never silently orphans the object. Throws
+  /// [PresignUploadException] if the remote delete fails.
+  ///
+  /// If the app is backgrounded when the delete finishes, a device notification
+  /// reports the outcome (there is no snackbar to show then).
   Future<void> delete(String id) async {
     final item = _store?.byId(id);
     if (item == null) return;
+
+    final s3Key = item.s3Key;
+    final hasRemote =
+        s3Key != null && s3Key.isNotEmpty && AppConfig.hasUploadUrl;
+
+    if (hasRemote) {
+      try {
+        await PresignUploadService(endpoint: AppConfig.awsUploadUrl)
+            .deleteObject(objectKey: s3Key);
+      } catch (e) {
+        if (!_isInForeground) {
+          unawaited(UploadNotifier.mediaDeleteFailed(
+            fileName: item.fileName,
+            error: e.toString(),
+          ));
+        }
+        rethrow;
+      }
+    }
+
     await _store!.delete(id);
     final file = File(item.localPath);
     if (await file.exists()) {
       await file.delete().catchError((_) => file);
     }
     notifyListeners();
+
+    if (!_isInForeground) {
+      unawaited(UploadNotifier.mediaDeleted(fileName: item.fileName));
+    }
   }
 
   // ── Helpers ──

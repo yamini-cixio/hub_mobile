@@ -1,16 +1,18 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-/// Posts a **device notification** when a media upload finishes or fails.
+/// Posts a **device notification** for media lifecycle events: an upload
+/// finishing/failing, and a cloud delete finishing/failing.
 ///
-/// Uploads are resolved on the client (the app itself talks to the presign
-/// Lambda and S3), so no server round-trip is required — this uses the same
-/// `flutter_local_notifications` plugin that renders foreground push banners.
+/// These outcomes are resolved on the client (the app itself talks to the
+/// presign Lambda and S3), so no server round-trip is required — this uses the
+/// same `flutter_local_notifications` plugin that renders foreground push
+/// banners.
 ///
 /// Safe to call from both the UI isolate and the background sync isolate
 /// (WorkManager / BGTaskScheduler): initialisation and posting are guarded and
 /// errors are swallowed, so a missing permission or plugin can never break an
-/// upload.
+/// upload or delete.
 class UploadNotifier {
   UploadNotifier._();
 
@@ -28,6 +30,8 @@ class UploadNotifier {
   // stacking duplicates.
   static const int _successId = 9101;
   static const int _failureId = 9102;
+  static const int _deleteSuccessId = 9103;
+  static const int _deleteFailureId = 9104;
 
   static Future<void> _ensureInitialized() async {
     if (_initialized) return;
@@ -83,6 +87,30 @@ class UploadNotifier {
     );
   }
 
+  /// Notifies that [fileName] was deleted.
+  ///
+  /// Used when a delete completes while the app is backgrounded (in the
+  /// foreground the screen already shows a snackbar).
+  static Future<void> mediaDeleted({required String fileName}) {
+    return _show(
+      id: _deleteSuccessId,
+      title: 'File deleted',
+      body: bodyForDelete(fileName),
+    );
+  }
+
+  /// Notifies that deleting [fileName] failed.
+  static Future<void> mediaDeleteFailed({
+    required String fileName,
+    String? error,
+  }) {
+    return _show(
+      id: _deleteFailureId,
+      title: 'Delete failed',
+      body: bodyForDeleteFailure(fileName, error),
+    );
+  }
+
   static Future<void> _show({
     required int id,
     required String title,
@@ -130,6 +158,14 @@ class UploadNotifier {
     final detail =
         (error == null || error.trim().isEmpty) ? '' : ' ${_firstLine(error)}';
     return '$base It will retry automatically.$detail';
+  }
+
+  static String bodyForDelete(String fileName) => '"$fileName" was deleted.';
+
+  static String bodyForDeleteFailure(String fileName, String? error) {
+    final detail =
+        (error == null || error.trim().isEmpty) ? '' : ' ${_firstLine(error)}';
+    return '"$fileName" could not be deleted.$detail';
   }
 
   static String _firstLine(String error) {

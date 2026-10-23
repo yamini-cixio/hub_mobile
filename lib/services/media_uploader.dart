@@ -82,6 +82,18 @@ class MediaUploader {
         file: file,
         fileName: item.fileName,
         contentType: item.mimeType,
+        mediaTypeTag: item.mediaTypeTag,
+        tags: {
+          'MediaId': item.id,
+          'MediaType': item.mediaTypeTag,
+          'Environment': 'Production',
+        },
+        metadata: {
+          'media-id': item.id,
+          'media-type': item.mediaTypeTag,
+          'file-name': item.fileName,
+          'created-at': item.createdAt,
+        },
       );
       await store.upsert(item.copyWith(
         status: UploadStatus.uploaded,

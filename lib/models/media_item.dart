@@ -4,10 +4,29 @@ enum MediaType {
   photo,
   video;
 
+  /// Default MIME type used when detection fails.
+  static const String defaultMimeType = 'application/octet-stream';
+
   static MediaType fromName(String? value) => MediaType.values.firstWhere(
         (t) => t.name == value,
         orElse: () => MediaType.photo,
       );
+
+  /// Derives the media type from a MIME type (e.g. `image/jpeg` → [photo]).
+  static MediaType fromMimeType(String? mimeType) {
+    final mime = (mimeType ?? defaultMimeType).toLowerCase();
+    if (mime.startsWith('image/')) return MediaType.photo;
+    if (mime.startsWith('video/')) return MediaType.video;
+    if (mime.startsWith('audio/')) return MediaType.voice;
+    return MediaType.photo;
+  }
+
+  /// The tag string sent to the backend / S3 metadata.
+  String get tag => switch (this) {
+        MediaType.photo => 'Photo',
+        MediaType.video => 'Video',
+        MediaType.voice => 'VoiceRecording',
+      };
 }
 
 /// Lifecycle of a locally-captured file as it makes its way to S3.
@@ -71,6 +90,9 @@ class MediaItem {
   bool get isUploaded => status == UploadStatus.uploaded;
   bool get needsUpload =>
       status == UploadStatus.pending || status == UploadStatus.failed;
+
+  /// Tag string derived from the stored [MediaType].
+  String get mediaTypeTag => type.tag;
 
   MediaItem copyWith({
     UploadStatus? status,
